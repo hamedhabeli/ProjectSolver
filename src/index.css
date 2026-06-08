@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  font-family: "Vazirmatn", sans-serif;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #020617;
+  color: #e2e8f0;
+  font-family: "Vazirmatn", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
