@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 from json import JSONDecodeError
+import re
 from typing import Any, Dict, List, Optional
 
+import z3
 from psai.llm.prompts import ABDUCTION_PROMPT, FORMALIZATION_PROMPT, MUS_EXPLANATION_PROMPT
 from psai.llm.provider import LLMProvider
 from psai.logic.syntax_gate import validate_smtlib2
@@ -131,6 +133,49 @@ def _build_combined_theory_and_named_assertions(
     theory_smt2 = "\n".join(decls + asserts)
     return theory_smt2, named_assertions
 
+
+
+
+_BARE_SYMBOL_RE = re.compile(r"^[A-Za-z_~!@$%^&*+=<>.?/-][A-Za-z0-9_~!@$%^&*+=<>.?/-]*$")
+
+
+def _goal_expr(goal_smt2: str) -> z3.BoolRef:
+    goal_smt2 = goal_smt2.strip()
+    if not goal_smt2:
+        raise z3.Z3Exception("Empty goal SMT-LIB2 input")
+
+    try:
+        parsed = z3.parse_smt2_string(goal_smt2)
+    except z3.Z3Exception:
+        if _BARE_SYMBOL_RE.match(goal_smt2):
+            return z3.Bool(goal_smt2)
+        raise
+
+    if isinstance(parsed, list):
+        bools: List[z3.BoolRef] = []
+        for p in parsed:
+            if isinstance(p, z3.BoolRef):
+                bools.append(p)
+            else:
+                raise z3.Z3Exception(f"Non-boolean goal parsed: {p}")
+        if not bools:
+            raise z3.Z3Exception("No boolean expressions found in goal")
+        return z3.And(*bools) if len(bools) > 1 else bools[0]
+
+    if isinstance(parsed, z3.BoolRef):
+        return parsed
+
+    raise z3.Z3Exception("Goal is not a boolean expression/list.")
+
+
+def _prove_with_solver(theory_smt2: str, goal_smt2: str, timeout_ms: int) -> bool:
+    s = z3.Solver()
+    if timeout_ms > 0:
+        s.set("timeout", timeout_ms)
+
+    s.from_string(theory_smt2)
+    s.add(z3.Not(_goal_expr(goal_smt2)))
+    return s.check() == z3.unsat
 
 def run_cycle(
     repo_id: str,
@@ -341,7 +386,15 @@ def run_cycle(
             combined_theory = theory_smt2 + "\n" + c["formal"]
             pr = prove_goal(combined_theory, goal_smt2, timeout_ms=timeout_ms)
             checks.append({"candidate_id": c["candidate_id"], "prove": pr})
-            if pr.get("status") == "proved":
+
+            proved = pr.get("status") == "proved"
+            if not proved:
+                try:
+                    proved = _prove_with_solver(combined_theory, goal_smt2, timeout_ms=timeout_ms)
+                except z3.Z3Exception:
+                    proved = False
+
+            if proved:
                 proved_by = {"candidate_id": c["candidate_id"], "formal": c["formal"]}
                 break
 
