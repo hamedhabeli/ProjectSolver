@@ -355,12 +355,15 @@ def run_cycle(
         for c in cands:
             if not isinstance(c, dict):
                 continue
+
             cand_id = c.get("candidate_id", "")
             formal = c.get("formal", "")
             if not isinstance(cand_id, str) or not isinstance(formal, str):
                 continue
 
-            v = validate_smtlib2(formal)
+            candidate_theory = theory_smt2 + "\n" + formal
+            v = validate_smtlib2(candidate_theory)
+
             if v.get("valid") is True:
                 valid_candidates.append(
                     {
