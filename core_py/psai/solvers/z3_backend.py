@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional
+import re
 
 import z3
 
@@ -19,6 +20,9 @@ class ProveResult:
     reason_unknown: Optional[str] = None
 
 
+_BARE_SYMBOL_RE = re.compile(r"^[A-Za-z_~!@$%^&*+=<>.?/-][A-Za-z0-9_~!@$%^&*+=<>.?/-]*$")
+
+
 def check_sat(theory_smt2: str, timeout_ms: int) -> Dict[str, Any]:
     if timeout_ms < 0:
         raise ValueError("timeout_ms must be non-negative")
@@ -28,7 +32,7 @@ def check_sat(theory_smt2: str, timeout_ms: int) -> Dict[str, Any]:
         s.set("timeout", timeout_ms)
 
     try:
-        s.add(_parse_as_assertions(theory_smt2))
+        s.from_string(theory_smt2)
         r = s.check()
         return asdict(_sat_result_from_z3(r, s))
     except z3.Z3Exception as e:
@@ -44,7 +48,7 @@ def prove_goal(theory_smt2: str, goal_smt2: str, timeout_ms: int) -> Dict[str, A
         s.set("timeout", timeout_ms)
 
     try:
-        s.add(_parse_as_assertions(theory_smt2))
+        s.from_string(theory_smt2)
 
         goal_expr = _parse_goal_expr(goal_smt2)
         s.add(z3.Not(goal_expr))
@@ -56,7 +60,13 @@ def prove_goal(theory_smt2: str, goal_smt2: str, timeout_ms: int) -> Dict[str, A
             return asdict(ProveResult(status="proved", sat_status_of_negation="unsat"))
         if sat_res.status == "sat":
             return asdict(ProveResult(status="disproved", sat_status_of_negation="sat"))
-        return asdict(ProveResult(status="undetermined", sat_status_of_negation="unknown", reason_unknown=sat_res.reason_unknown))
+        return asdict(
+            ProveResult(
+                status="undetermined",
+                sat_status_of_negation="unknown",
+                reason_unknown=sat_res.reason_unknown,
+            )
+        )
     except z3.Z3Exception as e:
         return asdict(ProveResult(status="undetermined", sat_status_of_negation="unknown", reason_unknown=str(e)))
 
@@ -101,7 +111,12 @@ def _parse_goal_expr(goal_smt2: str) -> z3.BoolRef:
     if not goal_smt2:
         raise z3.Z3Exception("Empty goal SMT-LIB2 input")
 
-    parsed = z3.parse_smt2_string(goal_smt2)
+    try:
+        parsed = z3.parse_smt2_string(goal_smt2)
+    except z3.Z3Exception:
+        if _BARE_SYMBOL_RE.match(goal_smt2):
+            return z3.Bool(goal_smt2)
+        raise
 
     if isinstance(parsed, list):
         bools = []
