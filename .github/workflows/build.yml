@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   python_tests:
     name: Python tests (${{ matrix.os }})
@@ -33,9 +37,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev]
 
+      - name: Create test-results dir
+        run: mkdir -p test-results
+
       - name: Run Python test suite
         run: |
-          mkdir -p test-results || python -c "from pathlib import Path; Path('test-results').mkdir(exist_ok=True)"
           pytest core_py/tests --junitxml=test-results/python-tests.xml
 
       - name: Upload python test reports
@@ -60,7 +66,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json', 'vite.config.ts', 'src/**/*.tsx') }}
+          key: npm-${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json', 'vite.config.ts', 'src/**/*.tsx', 'src/**/*.ts') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -90,7 +96,7 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install -e .[dev]
+          pip install .[dev]
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -127,7 +133,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json', 'vite.config.ts', 'src/**/*.tsx') }}
+          key: npm-${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json', 'vite.config.ts', 'src/**/*.tsx', 'src/**/*.ts') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -141,7 +147,7 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install -e .[dev]
+          pip install .[dev]
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from psai.logic.orchestrator import run_cycle, run_workflow
-from psai.llm.provider import GeminiProvider, LLMProvider, list_gemini_models
+from psai.llm.provider import GeminiProvider, GeminiModelInfo, LLMProvider, list_gemini_models
 from psai.state_store import StateStore
 
 JsonDict = dict[str, Any]
