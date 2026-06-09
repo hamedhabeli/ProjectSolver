@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -9,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from psai.logic.orchestrator import run_cycle, run_workflow
-from psai.llm.provider import LLMProvider
+from psai.llm.provider import GeminiProvider, LLMProvider, list_gemini_models
 from psai.state_store import StateStore
 
 JsonDict = dict[str, Any]
@@ -43,6 +44,33 @@ def _require(params: JsonDict, key: str, typ: type) -> Any:
     return val
 
 
+def _optional_str(params: JsonDict, key: str) -> Optional[str]:
+    if key not in params:
+        return None
+    val = params[key]
+    if val is None:
+        return None
+    if not isinstance(val, str):
+        raise JsonRpcError(-32602, f"Invalid param type for {key}: expected string or null")
+    return val
+
+
+def _optional_int(params: JsonDict, key: str, default: int) -> int:
+    val = params.get(key, default)
+    if not isinstance(val, int):
+        raise JsonRpcError(-32602, f"Invalid param type for {key}: expected integer")
+    return val
+
+
+def _optional_float(params: JsonDict, key: str, default: float) -> float:
+    val = params.get(key, default)
+    if isinstance(val, int):
+        return float(val)
+    if not isinstance(val, float):
+        raise JsonRpcError(-32602, f"Invalid param type for {key}: expected number")
+    return val
+
+
 class _NoopLLM(LLMProvider):
     def chat(self, system_prompt: str, user_prompt: str) -> str:
         raise RuntimeError("LLM not configured for this server instance")
@@ -51,14 +79,11 @@ class _NoopLLM(LLMProvider):
 class ApiServer:
     """
     JSON-RPC 2.0 server over stdin/stdout.
-
-    workflow.run is the one-shot integration route that executes:
-      formalize -> check_consistency -> explain_contradiction
     """
 
     def __init__(self, store: StateStore, llm: Optional[LLMProvider] = None) -> None:
         self.store = store
-        self.llm = llm or _NoopLLM()
+        self._override_llm = llm
 
         self._stdout_lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=4)
@@ -71,6 +96,10 @@ class ApiServer:
             "log": self._log,
             "cycle.run": self._cycle_run,
             "workflow.run": self._workflow_run,
+            "llm.get_config": self._llm_get_config,
+            "llm.set_config": self._llm_set_config,
+            "llm.gemini.list_models": self._llm_gemini_list_models,
+            "llm.gemini.test_key": self._llm_gemini_test_key,
         }
 
     def serve_forever(self) -> None:
@@ -126,6 +155,37 @@ class ApiServer:
         except Exception as e:  # noqa: BLE001
             self._write(_rpc_error(None, -32603, "Internal error", {"detail": str(e)}))
 
+    def _runtime_llm(self) -> LLMProvider:
+        if self._override_llm is not None:
+            return self._override_llm
+
+        config = self.store.get_llm_config()
+        provider = str(config.get("provider", "gemini") or "gemini")
+        if provider != "gemini":
+            return _NoopLLM()
+
+        api_key = str(config.get("api_key", "") or "")
+        model = str(config.get("model", "") or "")
+        if not api_key or not model:
+            return _NoopLLM()
+
+        try:
+            temperature = float(config.get("temperature", 0.2))
+            top_p = float(config.get("top_p", 0.95))
+            timeout_s = int(config.get("timeout_s", 30))
+            max_retries = int(config.get("max_retries", 2))
+        except Exception:  # noqa: BLE001
+            return _NoopLLM()
+
+        return GeminiProvider(
+            api_key=api_key,
+            model=model,
+            temperature=temperature,
+            top_p=top_p,
+            timeout_s=timeout_s,
+            max_retries=max_retries,
+        )
+
     def _repo_create(self, params: JsonDict) -> JsonDict:
         title = _require(params, "title", str)
         initial_payload = params.get("initial_payload", {})
@@ -158,13 +218,8 @@ class ApiServer:
 
     def _log(self, params: JsonDict) -> JsonDict:
         repo_id = _require(params, "repo_id", str)
-        from_node_id = params.get("from_node_id", None)
-        if from_node_id is not None and not isinstance(from_node_id, str):
-            raise JsonRpcError(-32602, "Invalid param type for from_node_id: expected string or null")
-
-        limit = params.get("limit", 50)
-        if not isinstance(limit, int) or limit < 0:
-            raise JsonRpcError(-32602, "Invalid param type for limit: expected non-negative integer")
+        from_node_id = _optional_str(params, "from_node_id")
+        limit = _optional_int(params, "limit", 50)
 
         nodes = self.store.log(repo_id=repo_id, from_node_id=from_node_id, limit=limit)
         return {"nodes": [asdict(n) for n in nodes]}
@@ -174,19 +229,74 @@ class ApiServer:
         workspace_id = _require(params, "workspace_id", str)
         step = _require(params, "step", str)
 
-        res = run_cycle(repo_id=repo_id, workspace_id=workspace_id, step=step, store=self.store, llm=self.llm)
+        res = run_cycle(repo_id=repo_id, workspace_id=workspace_id, step=step, store=self.store, llm=self._runtime_llm())
         return res
 
     def _workflow_run(self, params: JsonDict) -> JsonDict:
         repo_id = _require(params, "repo_id", str)
         workspace_id = _require(params, "workspace_id", str)
 
-        res = run_workflow(repo_id=repo_id, workspace_id=workspace_id, store=self.store, llm=self.llm)
+        res = run_workflow(repo_id=repo_id, workspace_id=workspace_id, store=self.store, llm=self._runtime_llm())
         return res
+
+    def _llm_get_config(self, params: JsonDict) -> JsonDict:
+        _ = params
+        return self.store.get_llm_config()
+
+    def _llm_set_config(self, params: JsonDict) -> JsonDict:
+        config = params.get("config", params)
+        if not isinstance(config, dict):
+            raise JsonRpcError(-32602, "config must be an object")
+
+        provider = str(config.get("provider", "gemini") or "gemini")
+        if provider != "gemini":
+            raise JsonRpcError(-32602, "Only provider='gemini' is supported in this build")
+
+        normalized = {
+            "provider": provider,
+            "api_key": str(config.get("api_key", "") or ""),
+            "model": str(config.get("model", "") or ""),
+            "temperature": _optional_float(config, "temperature", 0.2),
+            "top_p": _optional_float(config, "top_p", 0.95),
+            "timeout_s": _optional_int(config, "timeout_s", 30),
+            "max_retries": _optional_int(config, "max_retries", 2),
+        }
+        self.store.set_llm_config(normalized)
+        return self.store.get_llm_config()
+
+    def _llm_gemini_list_models(self, params: JsonDict) -> JsonDict:
+        api_key = _optional_str(params, "api_key")
+        if not api_key:
+            api_key = str(self.store.get_llm_config().get("api_key", "") or "")
+        if not api_key:
+            raise JsonRpcError(-32602, "Missing param: api_key")
+
+        timeout_s = _optional_int(params, "timeout_s", int(self.store.get_llm_config().get("timeout_s", 30)))
+        models = list_gemini_models(api_key=api_key, timeout_s=timeout_s)
+        return {"models": [asdict(m) for m in models]}
+
+    def _llm_gemini_test_key(self, params: JsonDict) -> JsonDict:
+        api_key = _optional_str(params, "api_key")
+        if not api_key:
+            api_key = str(self.store.get_llm_config().get("api_key", "") or "")
+        if not api_key:
+            raise JsonRpcError(-32602, "Missing param: api_key")
+
+        timeout_s = _optional_int(params, "timeout_s", int(self.store.get_llm_config().get("timeout_s", 30)))
+        models = list_gemini_models(api_key=api_key, timeout_s=timeout_s)
+        return {"ok": True, "models_count": len(models), "models": [asdict(m) for m in models]}
 
 
 def main() -> None:
-    db_path = Path("psai.sqlite3")
+    db_path_env = os.environ.get("PROJECTSOLVER_DB_PATH")
+    if db_path_env:
+        db_path = Path(db_path_env)
+    else:
+        app_dir = Path.home() / ".projectsolver"
+        app_dir.mkdir(parents=True, exist_ok=True)
+        db_path = app_dir / "psai.sqlite3"
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     store = StateStore(db_path=db_path)
     server = ApiServer(store=store)
     server.serve_forever()
