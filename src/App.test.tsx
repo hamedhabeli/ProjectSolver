@@ -1,8 +1,12 @@
 import '@testing-library/jest-dom/vitest';
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+afterEach(() => {
+  cleanup();
+});
 
 import App from './App';
 
@@ -77,7 +81,7 @@ describe('App', () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/Gemini API Key/i)).toHaveValue('test-key');
+      expect(screen.getByLabelText('Gemini API Key', { selector: 'input' })).toHaveValue('test-key');
     });
 
     expect(screen.getByLabelText(/Model/i)).toHaveValue('models/gemini-2.0-flash');
@@ -92,7 +96,7 @@ describe('App', () => {
       expect(screen.getByDisplayValue('test-key')).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole('button', { name: /بررسی منطقی/i }));
+    await user.click(screen.getByRole('button', { name: 'بررسی منطقی' }));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalled();
