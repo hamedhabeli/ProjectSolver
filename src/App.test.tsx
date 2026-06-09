@@ -89,7 +89,7 @@ describe('App', () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/Gemini API Key/i)).toHaveValue('test-key');
+      expect(screen.getByDisplayValue('test-key')).toBeInTheDocument();
     });
 
     await user.click(screen.getByRole('button', { name: /بررسی منطقی/i }));
