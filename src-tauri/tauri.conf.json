@@ -23,14 +23,10 @@
     }
   },
   "bundle": {
-    "active": true,
-    "targets": "all",
-    "externalBin": [
-      "binaries/core_py"
-    ],
-    "resources": [
-      "resources/sidecars/*",
-      "resources/solvers/*"
-    ]
-  }
+  "active": true,
+  "targets": "all",
+  "externalBin": [
+    "binaries/core_py"
+  ]
+}
 }
