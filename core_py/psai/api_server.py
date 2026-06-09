@@ -5,7 +5,7 @@ import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -273,7 +273,7 @@ class ApiServer:
 
         timeout_s = _optional_int(params, "timeout_s", int(self.store.get_llm_config().get("timeout_s", 30)))
         models = list_gemini_models(api_key=api_key, timeout_s=timeout_s)
-        return {"models": [asdict(m) for m in models]}
+        return {"models": [self._model_to_dict(m) for m in models]}
 
     def _llm_gemini_test_key(self, params: JsonDict) -> JsonDict:
         api_key = _optional_str(params, "api_key")
@@ -284,7 +284,14 @@ class ApiServer:
 
         timeout_s = _optional_int(params, "timeout_s", int(self.store.get_llm_config().get("timeout_s", 30)))
         models = list_gemini_models(api_key=api_key, timeout_s=timeout_s)
-        return {"ok": True, "models_count": len(models), "models": [asdict(m) for m in models]}
+        return {"ok": True, "models_count": len(models), "models": [self._model_to_dict(m) for m in models]}
+
+    def _model_to_dict(self, model: Any) -> JsonDict:
+        if is_dataclass(model):
+            return asdict(model)
+        if isinstance(model, dict):
+            return model
+        raise JsonRpcError(-32603, "Invalid model object returned from Gemini model list")
 
 
 def main() -> None:
