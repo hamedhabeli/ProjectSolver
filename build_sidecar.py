@@ -47,6 +47,8 @@ def build_pyinstaller_onefile() -> Path:
         "core_py",
         "--paths",
         str(REPO_ROOT / "core_py"),
+        "--collect-binaries",
+        "z3",
         "--distpath",
         str(DIST_DIR),
         "--workpath",
