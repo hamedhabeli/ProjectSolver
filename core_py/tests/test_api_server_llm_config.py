@@ -53,7 +53,6 @@ def store(tmp_path: Path):
 
 def test_llm_config_round_trip_via_api(store: StateStore):
     server = api_server.ApiServer(store=store)
-
     saved = server._llm_set_config(
         {
             "config": {
@@ -67,10 +66,8 @@ def test_llm_config_round_trip_via_api(store: StateStore):
             }
         }
     )
-
     assert saved["api_key"] == "persisted-key"
     assert saved["model"] == "models/gemini-2.0-flash"
-
     loaded = server._llm_get_config({})
     assert loaded["api_key"] == "persisted-key"
     assert loaded["temperature"] == 0.35
@@ -93,7 +90,13 @@ def test_gemini_model_listing_route_uses_api_key(monkeypatch, store: StateStore)
 
     called = {}
 
-    def fake_list_gemini_models(*, api_key: str, timeout_s: int, base_url: str = "https://generativelanguage.googleapis.com/v1beta", max_retries: int = 2):
+    def fake_list_gemini_models(
+        *,
+        api_key: str,
+        timeout_s: int,
+        base_url: str = "https://generativelanguage.googleapis.com/v1beta",
+        max_retries: int = 2,
+    ):
         called["api_key"] = api_key
         called["timeout_s"] = timeout_s
         return [
@@ -108,7 +111,6 @@ def test_gemini_model_listing_route_uses_api_key(monkeypatch, store: StateStore)
         ]
 
     monkeypatch.setattr(api_server, "list_gemini_models", fake_list_gemini_models)
-
     res = server._llm_gemini_list_models({})
     assert called["api_key"] == "stored-key"
     assert res["models"][0]["name"] == "models/gemini-2.0-flash"
@@ -116,7 +118,6 @@ def test_gemini_model_listing_route_uses_api_key(monkeypatch, store: StateStore)
 
 def test_workflow_uses_persisted_gemini_config(monkeypatch, store: StateStore):
     monkeypatch.setattr(api_server, "GeminiProvider", DummyGeminiProvider)
-
     server = api_server.ApiServer(store=store)
     store.set_llm_config(
         {
@@ -129,7 +130,6 @@ def test_workflow_uses_persisted_gemini_config(monkeypatch, store: StateStore):
             "max_retries": 2,
         }
     )
-
     repo = store.repo_create("cfg-repo", initial_payload={})
     root = store.get_node(repo.repo_id, repo.head)
     ws = store.commit(
@@ -175,7 +175,6 @@ def test_workflow_uses_persisted_gemini_config(monkeypatch, store: StateStore):
         ensure_ascii=False,
     )
     DummyGeminiProvider.responses = [formalize_response, explain_response]
-
     result = server._workflow_run({"repo_id": repo.repo_id, "workspace_id": ws.node_id})
     assert result["status"] == "ok"
     assert DummyGeminiProvider.last_init is not None
@@ -183,3 +182,43 @@ def test_workflow_uses_persisted_gemini_config(monkeypatch, store: StateStore):
     assert DummyGeminiProvider.last_init["model"] == "models/gemini-2.0-flash"
     assert DummyGeminiProvider.last_init["temperature"] == 0.45
     assert DummyGeminiProvider.last_init["top_p"] == 0.91
+
+
+def test_workflow_accepts_fenced_json_from_gemini(monkeypatch, store: StateStore):
+    monkeypatch.setattr(api_server, "GeminiProvider", DummyGeminiProvider)
+    server = api_server.ApiServer(store=store)
+    store.set_llm_config(
+        {
+            "provider": "gemini",
+            "api_key": "persisted-key",
+            "model": "models/gemini-2.0-flash",
+            "temperature": 0.45,
+            "top_p": 0.91,
+            "timeout_s": 30,
+            "max_retries": 2,
+        }
+    )
+    repo = store.repo_create("cfg-repo-2", initial_payload={})
+    root = store.get_node(repo.repo_id, repo.head)
+    ws = store.commit(
+        repo.repo_id,
+        parent_id=root.node_id,
+        message="workspace",
+        payload={
+            "user_problem_text": "پ و نقیض پ",
+            "context": {},
+            "timeout_ms": 2000,
+        },
+    )
+
+    fenced_formalize = """```json
+{"items":[{"item_id":"A1","fa_text":"پ","formal_smt2":"(declare-const p Bool) (assert p)"},{"item_id":"A2","fa_text":"نقیض پ","formal_smt2":"(declare-const p Bool) (assert (not p))"}]}
+```"""
+    fenced_explain = """```json
+{"nl_summary":"دو گزاره دربارهٔ p متناقض هستند.","choices":[{"choice_id":"C1","action":"retract","target_item_id":"A2","nl":"گزارهٔ دوم را حذف کنید."}]}
+```"""
+    DummyGeminiProvider.responses = [fenced_formalize, fenced_explain]
+    result = server._workflow_run({"repo_id": repo.repo_id, "workspace_id": ws.node_id})
+    assert result["status"] == "ok"
+    assert result["formalize"]["status"] == "ok"
+    assert result["explain_contradiction"]["status"] == "ok"

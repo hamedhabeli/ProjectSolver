@@ -120,6 +120,7 @@ class GeminiProvider(LLMProvider):
             "generationConfig": {
                 "temperature": self.temperature,
                 "topP": self.top_p,
+                "responseMimeType": "application/json",
             },
         }
         return _request_json_text(url, payload, timeout_s=self.timeout_s, max_retries=self.max_retries)
