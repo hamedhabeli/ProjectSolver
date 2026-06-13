@@ -11,6 +11,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+def _normalize_gemini_model_name(name: str) -> str:
+    name = str(name or "").strip()
+    return name.removeprefix("models/")
+
+
 class LLMProvider(ABC):
     @abstractmethod
     def chat(self, system_prompt: str, user_prompt: str) -> str:
@@ -21,6 +26,7 @@ class LLMProvider(ABC):
 class OpenAICompatibleProvider(LLMProvider):
     """
     Minimal OpenAI-compatible chat.completions client using urllib.request.
+
     Works with providers that expose OpenAI-compatible endpoints.
     """
 
@@ -49,14 +55,14 @@ class OpenAICompatibleProvider(LLMProvider):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {key}",
         }
-        last_err: Optional[Exception] = None
 
+        last_err: Optional[Exception] = None
         for attempt in range(self.max_retries + 1):
             try:
                 req = urllib.request.Request(url, data=data, headers=headers, method="POST")
                 with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
                     raw = resp.read().decode("utf-8", errors="replace")
-                    return _extract_openai_text(raw)
+                return _extract_openai_text(raw)
             except urllib.error.HTTPError as e:
                 body = None
                 try:
@@ -99,12 +105,18 @@ class GeminiProvider(LLMProvider):
     def chat(self, system_prompt: str, user_prompt: str) -> str:
         key = self.api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
         if not key:
-            raise RuntimeError("Missing Gemini API key. Set GEMINI_API_KEY, GOOGLE_API_KEY, or pass api_key=...")
+            raise RuntimeError(
+                "Missing Gemini API key. Set GEMINI_API_KEY, GOOGLE_API_KEY, or pass api_key=..."
+            )
+
+        model_name = _normalize_gemini_model_name(self.model)
+        if not model_name:
+            raise RuntimeError("Missing Gemini model name")
 
         url = (
             self.base_url.rstrip("/")
             + "/models/"
-            + urllib.parse.quote(self.model, safe="")
+            + urllib.parse.quote(model_name, safe="")
             + ":generateContent?key="
             + urllib.parse.quote_plus(key)
         )
@@ -129,11 +141,7 @@ def list_gemini_models(
     if not api_key:
         raise RuntimeError("Missing Gemini API key")
 
-    url = (
-        base_url.rstrip("/")
-        + "/models?key="
-        + urllib.parse.quote_plus(api_key)
-    )
+    url = base_url.rstrip("/") + "/models?key=" + urllib.parse.quote_plus(api_key)
     payload = _request_json(url, timeout_s=timeout_s, max_retries=max_retries)
     models = payload.get("models", [])
     if not isinstance(models, list):
@@ -143,16 +151,18 @@ def list_gemini_models(
     for item in models:
         if not isinstance(item, dict):
             continue
+
         methods = item.get("supportedGenerationMethods", [])
         if not isinstance(methods, list):
             methods = []
+
         methods_str = [str(x) for x in methods]
         if "generateContent" not in methods_str:
             continue
 
         out.append(
             GeminiModelInfo(
-                name=str(item.get("name", "")),
+                name=_normalize_gemini_model_name(str(item.get("name", ""))),
                 display_name=str(item.get("displayName", item.get("name", ""))),
                 description=str(item.get("description", "")),
                 supported_generation_methods=methods_str,
@@ -172,11 +182,16 @@ def _request_json(
 ) -> dict[str, object]:
     body = None if payload is None else json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"}
-    last_err: Optional[Exception] = None
 
+    last_err: Optional[Exception] = None
     for attempt in range(max_retries + 1):
         try:
-            req = urllib.request.Request(url, data=body, headers=headers, method="POST" if body is not None else "GET")
+            req = urllib.request.Request(
+                url,
+                data=body,
+                headers=headers,
+                method="POST" if body is not None else "GET",
+            )
             with urllib.request.urlopen(req, timeout=timeout_s) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
             parsed = json.loads(raw)
@@ -257,6 +272,7 @@ def _extract_openai_text(raw: str) -> str:
     content = message.get("content", "")
     if isinstance(content, str):
         return content.strip()
+
     if isinstance(content, list):
         texts: list[str] = []
         for part in content:
