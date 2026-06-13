@@ -11,11 +11,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 
-def _normalize_gemini_model_name(name: str) -> str:
-    name = str(name or "").strip()
-    return name.removeprefix("models/")
-
-
 class LLMProvider(ABC):
     @abstractmethod
     def chat(self, system_prompt: str, user_prompt: str) -> str:
@@ -109,14 +104,13 @@ class GeminiProvider(LLMProvider):
                 "Missing Gemini API key. Set GEMINI_API_KEY, GOOGLE_API_KEY, or pass api_key=..."
             )
 
-        model_name = _normalize_gemini_model_name(self.model)
-        if not model_name:
+        if not str(self.model or "").strip():
             raise RuntimeError("Missing Gemini model name")
 
         url = (
             self.base_url.rstrip("/")
             + "/models/"
-            + urllib.parse.quote(model_name, safe="")
+            + urllib.parse.quote(str(self.model), safe="")
             + ":generateContent?key="
             + urllib.parse.quote_plus(key)
         )
@@ -162,7 +156,7 @@ def list_gemini_models(
 
         out.append(
             GeminiModelInfo(
-                name=_normalize_gemini_model_name(str(item.get("name", ""))),
+                name=str(item.get("name", "")),
                 display_name=str(item.get("displayName", item.get("name", ""))),
                 description=str(item.get("description", "")),
                 supported_generation_methods=methods_str,
