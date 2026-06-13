@@ -56,27 +56,27 @@ def test_list_gemini_models_filters_non_generatecontent(monkeypatch):
     assert "generateContent" in models[0].supported_generation_methods
 
 
-def test_gemini_chat_sends_generation_config(monkeypatch):
+def test_gemini_chat_normalizes_model_name_and_sends_generation_config(monkeypatch):
     captured = {}
 
     def fake_urlopen(req, timeout=30):
-      captured["url"] = req.full_url
-      captured["body"] = json.loads(req.data.decode("utf-8"))
-      return FakeResponse(
-          json.dumps(
-              {
-                  "candidates": [
-                      {
-                          "content": {
-                              "parts": [
-                                  {"text": "hello"},
-                              ]
-                          }
-                      }
-                  ]
-              }
-          )
-      )
+        captured["url"] = req.full_url
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return FakeResponse(
+            json.dumps(
+                {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {"text": "hello"},
+                                ]
+                            }
+                        }
+                    ]
+                }
+            )
+        )
 
     monkeypatch.setattr(provider_module.urllib.request, "urlopen", fake_urlopen)
 
@@ -89,8 +89,36 @@ def test_gemini_chat_sends_generation_config(monkeypatch):
     text = provider.chat("system prompt", "user prompt")
 
     assert text == "hello"
-    assert "/models/models%2Fgemini-2.0-flash:generateContent?key=secret" in captured["url"]
+    assert captured["url"].endswith("/models/gemini-2.0-flash:generateContent?key=secret")
     assert captured["body"]["systemInstruction"]["parts"][0]["text"] == "system prompt"
     assert captured["body"]["contents"][0]["parts"][0]["text"] == "user prompt"
     assert captured["body"]["generationConfig"]["temperature"] == 0.3
     assert captured["body"]["generationConfig"]["topP"] == 0.9
+
+
+def test_gemini_chat_accepts_plain_model_name(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(req, timeout=30):
+        captured["url"] = req.full_url
+        return FakeResponse(
+            json.dumps(
+                {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {"text": "ok"},
+                                ]
+                            }
+                        }
+                    ]
+                }
+            )
+        )
+
+    monkeypatch.setattr(provider_module.urllib.request, "urlopen", fake_urlopen)
+
+    provider = GeminiProvider(model="gemini-3.5-flash", api_key="secret")
+    assert provider.chat("system", "user") == "ok"
+    assert captured["url"].endswith("/models/gemini-3.5-flash:generateContent?key=secret")

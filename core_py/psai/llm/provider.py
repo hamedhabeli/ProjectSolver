@@ -19,11 +19,7 @@ class LLMProvider(ABC):
 
 @dataclass(frozen=True)
 class OpenAICompatibleProvider(LLMProvider):
-    """
-    Minimal OpenAI-compatible chat.completions client using urllib.request.
-
-    Works with providers that expose OpenAI-compatible endpoints.
-    """
+    """Minimal OpenAI-compatible chat.completions client using urllib.request."""
 
     base_url: str
     model: str
@@ -34,7 +30,9 @@ class OpenAICompatibleProvider(LLMProvider):
     def chat(self, system_prompt: str, user_prompt: str) -> str:
         key = self.api_key or os.environ.get("OPENAI_API_KEY")
         if not key:
-            raise RuntimeError("Missing API key. Set OPENAI_API_KEY or pass api_key=...")
+            raise RuntimeError(
+                "Missing API key. Set OPENAI_API_KEY or pass api_key=..."
+            )
 
         url = self.base_url.rstrip("/") + "/chat/completions"
         payload = {
@@ -57,7 +55,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 req = urllib.request.Request(url, data=data, headers=headers, method="POST")
                 with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
                     raw = resp.read().decode("utf-8", errors="replace")
-                return _extract_openai_text(raw)
+                    return _extract_openai_text(raw)
             except urllib.error.HTTPError as e:
                 body = None
                 try:
@@ -83,13 +81,18 @@ class GeminiModelInfo:
     supported_generation_methods: list[str]
 
 
+def _normalize_gemini_model_name(model: str) -> str:
+    value = str(model or "").strip()
+    while value.startswith("models/"):
+        value = value.removeprefix("models/")
+    return value
+
+
 @dataclass(frozen=True)
 class GeminiProvider(LLMProvider):
-    """
-    Gemini REST client using urllib.request only.
-    """
+    """Gemini REST client using urllib.request only."""
 
-    model: str = "gemini-1.5-flash"
+    model: str = "gemini-3.5-flash"
     api_key: Optional[str] = None
     timeout_s: int = 30
     max_retries: int = 2
@@ -104,16 +107,20 @@ class GeminiProvider(LLMProvider):
                 "Missing Gemini API key. Set GEMINI_API_KEY, GOOGLE_API_KEY, or pass api_key=..."
             )
 
-        if not str(self.model or "").strip():
+        model_id = _normalize_gemini_model_name(self.model)
+        if not model_id:
             raise RuntimeError("Missing Gemini model name")
 
+        # Gemini REST expects the path form models/{model}, with the model id
+        # used as a single path segment (e.g. gemini-3.5-flash).
         url = (
             self.base_url.rstrip("/")
             + "/models/"
-            + urllib.parse.quote(str(self.model), safe="")
+            + urllib.parse.quote(model_id, safe="-_.~")
             + ":generateContent?key="
             + urllib.parse.quote_plus(key)
         )
+
         payload: dict[str, object] = {
             "systemInstruction": {"parts": [{"text": system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -150,7 +157,6 @@ def list_gemini_models(
         methods = item.get("supportedGenerationMethods", [])
         if not isinstance(methods, list):
             methods = []
-
         methods_str = [str(x) for x in methods]
         if "generateContent" not in methods_str:
             continue
@@ -189,10 +195,10 @@ def _request_json(
             )
             with urllib.request.urlopen(req, timeout=timeout_s) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
-            parsed = json.loads(raw)
-            if not isinstance(parsed, dict):
-                raise RuntimeError("Expected JSON object response")
-            return parsed
+                parsed = json.loads(raw)
+                if not isinstance(parsed, dict):
+                    raise RuntimeError("Expected JSON object response")
+                return parsed
         except urllib.error.HTTPError as e:
             body_text = None
             try:
